@@ -183,16 +183,23 @@ class PDFExporter:
             spaceAfter=2
         )
         
+        # 安全处理evaluation字段，确保是字符串类型
+        def safe_get_evaluation(data, key, default='暂无评价'):
+            value = data.get(key, default)
+            if isinstance(value, list):
+                return ' '.join(str(item) for item in value) if value else default
+            return str(value) if value else default
+        
         score_data = [
             ['评估维度', '得分', '评价'],
             ['教育背景', f"{candidate_data.get('education_score', 0)}/10", 
-             Paragraph(candidate_data.get('education_evaluation', '') or '暂无评价', eval_style)],
+             Paragraph(safe_get_evaluation(candidate_data, 'education_evaluation'), eval_style)],
             ['工作经验', f"{candidate_data.get('experience_score', 0)}/10", 
-             Paragraph(candidate_data.get('experience_evaluation', '') or '暂无评价', eval_style)],
+             Paragraph(safe_get_evaluation(candidate_data, 'experience_evaluation'), eval_style)],
             ['技能匹配', f"{candidate_data.get('skills_score', 0)}/10", 
-             Paragraph(candidate_data.get('skills_evaluation', '') or '暂无评价', eval_style)],
+             Paragraph(safe_get_evaluation(candidate_data, 'skills_evaluation'), eval_style)],
             ['项目经验', f"{candidate_data.get('projects_score', 0)}/10", 
-             Paragraph(candidate_data.get('projects_evaluation', '') or '暂无评价', eval_style)],
+             Paragraph(safe_get_evaluation(candidate_data, 'projects_evaluation'), eval_style)],
         ]
         
         # 调整列宽，确保内容不会超出
@@ -218,18 +225,22 @@ class PDFExporter:
         # 优势和关注点
         story.append(Paragraph("优势分析", styles['heading']))
         strengths = candidate_data.get('strengths', [])
-        if strengths:
+        if strengths and isinstance(strengths, list):
             for i, strength in enumerate(strengths, 1):
-                story.append(Paragraph(f"{i}. {strength}", styles['normal']))
+                story.append(Paragraph(f"{i}. {str(strength)}", styles['normal']))
+        elif strengths and isinstance(strengths, str):
+            story.append(Paragraph(strengths, styles['normal']))
         else:
             story.append(Paragraph("暂无优势信息", styles['normal']))
         story.append(Spacer(1, 12))
         
         story.append(Paragraph("关注点", styles['heading']))
         concerns = candidate_data.get('concerns', [])
-        if concerns:
+        if concerns and isinstance(concerns, list):
             for i, concern in enumerate(concerns, 1):
-                story.append(Paragraph(f"{i}. {concern}", styles['normal']))
+                story.append(Paragraph(f"{i}. {str(concern)}", styles['normal']))
+        elif concerns and isinstance(concerns, str):
+            story.append(Paragraph(concerns, styles['normal']))
         else:
             story.append(Paragraph("暂无关注点", styles['normal']))
         story.append(Spacer(1, 20))
@@ -237,19 +248,22 @@ class PDFExporter:
         # 综合评价
         story.append(Paragraph("综合评价", styles['heading']))
         summary = candidate_data.get('summary', '暂无综合评价')
-        story.append(Paragraph(summary, styles['normal']))
+        summary_text = str(summary) if summary else '暂无综合评价'
+        story.append(Paragraph(summary_text, styles['normal']))
         story.append(Spacer(1, 20))
         
         # 面试建议
         story.append(Paragraph("面试建议", styles['heading']))
         interview_suggestions = candidate_data.get('interview_suggestions', '暂无面试建议')
-        story.append(Paragraph(interview_suggestions, styles['normal']))
+        suggestions_text = str(interview_suggestions) if interview_suggestions else '暂无面试建议'
+        story.append(Paragraph(suggestions_text, styles['normal']))
         story.append(Spacer(1, 20))
         
         # 发展潜力
         story.append(Paragraph("发展潜力", styles['heading']))
         development_potential = candidate_data.get('development_potential', '暂无发展潜力评估')
-        story.append(Paragraph(development_potential, styles['normal']))
+        potential_text = str(development_potential) if development_potential else '暂无发展潜力评估'
+        story.append(Paragraph(potential_text, styles['normal']))
         story.append(Spacer(1, 30))
         
         # 面试问题
@@ -282,12 +296,16 @@ class PDFExporter:
                 question_data = [['序号', '面试问题', '关注点']]
                 
                 for i, q in enumerate(questions[:3], 1):  # 每个类别最多显示3个问题
-                    question_text = q['question'] if isinstance(q, dict) else str(q)
-                    focus_text = q.get('focus', '综合能力') if isinstance(q, dict) else '综合能力'
+                    if isinstance(q, dict):
+                        question_text = str(q.get('question', '暂无问题'))
+                        focus_text = str(q.get('focus', '综合能力'))
+                    else:
+                        question_text = str(q) if q else '暂无问题'
+                        focus_text = '综合能力'
                     
                     question_data.append([
                         str(i),
-                        Paragraph(question_text or '暂无问题', question_style),
+                        Paragraph(question_text, question_style),
                         Paragraph(focus_text, focus_style_table)
                     ])
                 

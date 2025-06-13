@@ -654,7 +654,9 @@ OPENROUTER_API_KEY=your_api_key_here
             # 添加总览统计
             st.subheader("📈 分析总览")
             total_candidates = len(st.session_state.analysis_results)
-            avg_score = sum(r['overall_score'] for r in st.session_state.analysis_results) / total_candidates
+            # 安全地计算平均分数，处理可能缺失overall_score字段的情况
+            valid_scores = [r.get('overall_score', 0) for r in st.session_state.analysis_results if 'overall_score' in r]
+            avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
             
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -662,10 +664,20 @@ OPENROUTER_API_KEY=your_api_key_here
             with col2:
                 st.metric("📊 平均得分", f"{avg_score:.1f}")
             with col3:
-                best_candidate = max(st.session_state.analysis_results, key=lambda x: x['overall_score'])
-                st.metric("🏆 最高得分", f"{best_candidate['overall_score']:.1f}")
+                # 安全地找到最高得分候选人
+                valid_candidates = [r for r in st.session_state.analysis_results if 'overall_score' in r]
+                if valid_candidates:
+                    best_candidate = max(valid_candidates, key=lambda x: x.get('overall_score', 0))
+                    st.metric("🏆 最高得分", f"{best_candidate.get('overall_score', 0):.1f}")
+                else:
+                    st.metric("🏆 最高得分", "N/A")
             with col4:
-                st.metric("📋 最佳候选人", best_candidate['candidate_name'][:10] + "..." if len(best_candidate['candidate_name']) > 10 else best_candidate['candidate_name'])
+                if valid_candidates and 'best_candidate' in locals():
+                    candidate_name = best_candidate.get('candidate_name', '未知')
+                    display_name = candidate_name[:10] + "..." if len(candidate_name) > 10 else candidate_name
+                    st.metric("📋 最佳候选人", display_name)
+                else:
+                    st.metric("📋 最佳候选人", "N/A")
             
             st.markdown("---")
             
@@ -684,18 +696,19 @@ OPENROUTER_API_KEY=your_api_key_here
                     elif score >= 5: return "⚠️"
                     else: return "❌"
                 
-                with st.expander(f"📋 {result['candidate_name']} {get_score_emoji(result['overall_score'])} (综合得分: {result['overall_score']})", expanded=i==0):
+                overall_score = result.get('overall_score', 0)
+                with st.expander(f"📋 {result.get('candidate_name', '未知候选人')} {get_score_emoji(overall_score)} (综合得分: {overall_score})", expanded=i==0):
                     st.markdown(f'<div class="candidate-card">', unsafe_allow_html=True)
                     
                     # 评分徽章
                     st.markdown("**🎯 快速评分概览**")
                     score_badges = ""
                     scores = [
-                        ("教育", result['education_score']),
-                        ("经验", result['experience_score']),
-                        ("技能", result['skills_score']),
-                        ("项目", result['projects_score']),
-                        ("综合", result['overall_score'])
+                        ("教育", result.get('education_score', 0)),
+                        ("经验", result.get('experience_score', 0)),
+                        ("技能", result.get('skills_score', 0)),
+                        ("项目", result.get('projects_score', 0)),
+                        ("综合", overall_score)
                     ]
                     
                     for name, score in scores:
@@ -712,11 +725,11 @@ OPENROUTER_API_KEY=your_api_key_here
                         
                         # 评分维度和分数
                         dimensions = [
-                            ('🎓 教育背景', result['education_score'], result['education_evaluation']),
-                            ('💼 工作经验', result['experience_score'], result['experience_evaluation']),
-                            ('🛠️ 技能匹配', result['skills_score'], result['skills_evaluation']),
-                            ('🚀 项目经验', result['projects_score'], result['projects_evaluation']),
-                            ('⭐ 综合素质', result['overall_score'], result['overall_evaluation'])
+                            ('🎓 教育背景', result.get('education_score', 0), result.get('education_evaluation', '暂无评价')),
+                            ('💼 工作经验', result.get('experience_score', 0), result.get('experience_evaluation', '暂无评价')),
+                            ('🛠️ 技能匹配', result.get('skills_score', 0), result.get('skills_evaluation', '暂无评价')),
+                            ('🚀 项目经验', result.get('projects_score', 0), result.get('projects_evaluation', '暂无评价')),
+                            ('⭐ 综合素质', overall_score, result.get('overall_evaluation', '暂无评价'))
                         ]
                         
                         for dimension, score, evaluation in dimensions:
@@ -736,7 +749,7 @@ OPENROUTER_API_KEY=your_api_key_here
                             
                             # 详细评价（使用折叠区域）
                             with st.container():
-                                if st.button(f"查看 {dimension} 详细评价", key=f"btn_{result['candidate_name']}_{dimension}"):
+                                if st.button(f"查看 {dimension} 详细评价", key=f"btn_{result.get('candidate_name', '未知')}_{dimension}"):
                                     st.info(evaluation)
                                 else:
                                     st.caption(f"点击查看 {dimension} 的详细评价...")
@@ -747,11 +760,11 @@ OPENROUTER_API_KEY=your_api_key_here
                         # 创建雷达图
                         categories = ['教育背景', '工作经验', '技能匹配', '项目经验', '综合素质']
                         values = [
-                            result['education_score'],
-                            result['experience_score'],
-                            result['skills_score'],
-                            result['projects_score'],
-                            result['overall_score']
+                            result.get('education_score', 0),
+                            result.get('experience_score', 0),
+                            result.get('skills_score', 0),
+                            result.get('projects_score', 0),
+                            overall_score
                         ]
                         
                         fig = go.Figure()
@@ -759,7 +772,7 @@ OPENROUTER_API_KEY=your_api_key_here
                             r=values,
                             theta=categories,
                             fill='toself',
-                            name=result['candidate_name']
+                            name=result.get('candidate_name', '未知')
                         ))
                         
                         fig.update_layout(
@@ -810,7 +823,7 @@ OPENROUTER_API_KEY=your_api_key_here
                     st.markdown("---")
                     col_export1, col_export2 = st.columns([1, 3])
                     with col_export1:
-                        if st.button(f"📄 导出PDF报告", key=f"export_{result['candidate_name']}", type="primary"):
+                        if st.button(f"📄 导出PDF报告", key=f"export_{result.get('candidate_name', '未知')}", type="primary"):
                             # 准备面试问题数据
                             interview_questions = [
                                 ("技术问题", [
@@ -835,9 +848,9 @@ OPENROUTER_API_KEY=your_api_key_here
                                 st.download_button(
                                     label="💾 下载PDF报告",
                                     data=pdf_bytes,
-                                    file_name=f"{result['candidate_name']}_分析报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                    file_name=f"{result.get('candidate_name', '未知')}_分析报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
                                     mime="application/pdf",
-                                    key=f"download_{result['candidate_name']}"
+                                    key=f"download_{result.get('candidate_name', '未知')}"
                                 )
                                 st.success("PDF报告生成成功！")
                             except Exception as e:
@@ -854,7 +867,7 @@ OPENROUTER_API_KEY=your_api_key_here
         
         if 'analysis_results' in st.session_state and len(st.session_state.analysis_results) > 1:
             # 排序候选人
-            sorted_results = sorted(st.session_state.analysis_results, key=lambda x: x['overall_score'], reverse=True)
+            sorted_results = sorted(st.session_state.analysis_results, key=lambda x: x.get('overall_score', 0), reverse=True)
             
             # 显示排名概览
             st.subheader("🏆 候选人排名")
@@ -866,8 +879,8 @@ OPENROUTER_API_KEY=your_api_key_here
                     st.markdown(f"""
                     <div class="ranking-card rank-{i+1}">
                         <div class="rank-header">{rank_emoji} 第 {i+1} 名</div>
-                        <div class="candidate-name">{result['candidate_name']}</div>
-                        <div class="overall-score">{result['overall_score']:.1f} 分</div>
+                        <div class="candidate-name">{result.get('candidate_name', '未知')}</div>
+                        <div class="overall-score">{result.get('overall_score', 0):.1f} 分</div>
                     </div>
                     """, unsafe_allow_html=True)
             
@@ -876,12 +889,12 @@ OPENROUTER_API_KEY=your_api_key_here
             # 创建对比表格
             comparison_data = {
                 '排名': [f"#{i+1}" for i in range(len(sorted_results))],
-                '👤 候选人': [result['candidate_name'] for result in sorted_results],
-                '🎓 教育': [result['education_score'] for result in sorted_results],
-                '💼 经验': [result['experience_score'] for result in sorted_results],
-                '🛠️ 技能': [result['skills_score'] for result in sorted_results],
-                '🚀 项目': [result['projects_score'] for result in sorted_results],
-                '⭐ 综合': [result['overall_score'] for result in sorted_results]
+                '👤 候选人': [result.get('candidate_name', '未知') for result in sorted_results],
+                '🎓 教育': [result.get('education_score', 0) for result in sorted_results],
+                '💼 经验': [result.get('experience_score', 0) for result in sorted_results],
+                '🛠️ 技能': [result.get('skills_score', 0) for result in sorted_results],
+                '🚀 项目': [result.get('projects_score', 0) for result in sorted_results],
+                '⭐ 综合': [result.get('overall_score', 0) for result in sorted_results]
             }
             
             df_comparison = pd.DataFrame(comparison_data)
@@ -900,12 +913,13 @@ OPENROUTER_API_KEY=your_api_key_here
                 # 准备柱状图数据
                 chart_data = []
                 for result in sorted_results:
+                    candidate_name = result.get('candidate_name', '未知')
                     chart_data.extend([
-                        {'候选人': result['candidate_name'], '维度': '🎓 教育', '得分': result['education_score']},
-                        {'候选人': result['candidate_name'], '维度': '💼 经验', '得分': result['experience_score']},
-                        {'候选人': result['candidate_name'], '维度': '🛠️ 技能', '得分': result['skills_score']},
-                        {'候选人': result['candidate_name'], '维度': '🚀 项目', '得分': result['projects_score']},
-                        {'候选人': result['candidate_name'], '维度': '⭐ 综合', '得分': result['overall_score']}
+                        {'候选人': candidate_name, '维度': '🎓 教育', '得分': result.get('education_score', 0)},
+                        {'候选人': candidate_name, '维度': '💼 经验', '得分': result.get('experience_score', 0)},
+                        {'候选人': candidate_name, '维度': '🛠️ 技能', '得分': result.get('skills_score', 0)},
+                        {'候选人': candidate_name, '维度': '🚀 项目', '得分': result.get('projects_score', 0)},
+                        {'候选人': candidate_name, '维度': '⭐ 综合', '得分': result.get('overall_score', 0)}
                     ])
                 
                 chart_df = pd.DataFrame(chart_data)
@@ -940,18 +954,18 @@ OPENROUTER_API_KEY=your_api_key_here
                 
                 for i, result in enumerate(sorted_results):
                     values = [
-                        result['education_score'],
-                        result['experience_score'],
-                        result['skills_score'],
-                        result['projects_score'],
-                        result['overall_score']
+                        result.get('education_score', 0),
+                        result.get('experience_score', 0),
+                        result.get('skills_score', 0),
+                        result.get('projects_score', 0),
+                        result.get('overall_score', 0)
                     ]
                     
                     fig_radar.add_trace(go.Scatterpolar(
                         r=values,
                         theta=categories,
                         fill='toself',
-                        name=result['candidate_name'],
+                        name=result.get('candidate_name', '未知'),
                         line_color=colors[i % len(colors)],
                         fillcolor=colors[i % len(colors)],
                         opacity=0.6
@@ -981,41 +995,41 @@ OPENROUTER_API_KEY=your_api_key_here
             
             # 生成推荐报告
             top_candidate = sorted_results[0]
-            st.success(f"**🏆 推荐候选人：{top_candidate['candidate_name']}**")
+            st.success(f"**🏆 推荐候选人：{top_candidate.get('candidate_name', '未知')}**")
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.info(f"**综合得分：{top_candidate['overall_score']:.1f}/10**")
+                st.info(f"**综合得分：{top_candidate.get('overall_score', 0):.1f}/10**")
             with col2:
                 # 找出最强项
                 scores = {
-                    '教育': top_candidate['education_score'],
-                    '经验': top_candidate['experience_score'], 
-                    '技能': top_candidate['skills_score'],
-                    '项目': top_candidate['projects_score']
+                    '教育': top_candidate.get('education_score', 0),
+                    '经验': top_candidate.get('experience_score', 0), 
+                    '技能': top_candidate.get('skills_score', 0),
+                    '项目': top_candidate.get('projects_score', 0)
                 }
                 best_skill = max(scores, key=scores.get)
                 st.info(f"**最强项：{best_skill} ({scores[best_skill]:.1f}分)**")
             with col3:
                 # 计算优势程度
                 if len(sorted_results) > 1:
-                    advantage = top_candidate['overall_score'] - sorted_results[1]['overall_score']
+                    advantage = top_candidate.get('overall_score', 0) - sorted_results[1].get('overall_score', 0)
                     st.info(f"**领先优势：{advantage:.1f}分**")
                 else:
                     st.info("**唯一候选人**")
             
             # 详细分析报告
             with st.expander("📋 详细推荐分析报告", expanded=False):
-                st.markdown(f"**候选人：{top_candidate['candidate_name']}**")
+                st.markdown(f"**候选人：{top_candidate.get('candidate_name', '未知')}**")
                 st.markdown(f"**推荐理由：**")
-                st.write(f"• 综合评分最高：{top_candidate['overall_score']:.1f}/10")
+                st.write(f"• 综合评分最高：{top_candidate.get('overall_score', 0):.1f}/10")
                 st.write(f"• 核心优势：{top_candidate['summary'][:100]}...")
                 
                 if len(sorted_results) > 1:
                     st.markdown("**与其他候选人对比：**")
                     for i, candidate in enumerate(sorted_results[1:3], 2):
-                        diff = top_candidate['overall_score'] - candidate['overall_score']
-                        st.write(f"• 比第{i}名 {candidate['candidate_name']} 高出 {diff:.1f} 分")
+                        diff = top_candidate.get('overall_score', 0) - candidate.get('overall_score', 0)
+                        st.write(f"• 比第{i}名 {candidate.get('candidate_name', '未知')} 高出 {diff:.1f} 分")
             
             # 完整排名表
             st.subheader("📊 完整排名表")
@@ -1025,18 +1039,18 @@ OPENROUTER_API_KEY=your_api_key_here
             for i, result in enumerate(sorted_results):
                 # 找出最强项和最弱项
                 scores_dict = {
-                    '教育': result['education_score'],
-                    '经验': result['experience_score'],
-                    '技能': result['skills_score'],
-                    '项目': result['projects_score']
+                    '教育': result.get('education_score', 0),
+                    '经验': result.get('experience_score', 0),
+                    '技能': result.get('skills_score', 0),
+                    '项目': result.get('projects_score', 0)
                 }
                 best_skill = max(scores_dict, key=scores_dict.get)
                 worst_skill = min(scores_dict, key=scores_dict.get)
                 
                 ranking_data.append({
                     '排名': f"#{i+1}",
-                    '候选人': result['candidate_name'],
-                    '综合得分': f"{result['overall_score']:.1f}",
+                    '候选人': result.get('candidate_name', '未知'),
+                    '综合得分': f"{result.get('overall_score', 0):.1f}",
                     '最强项': f"{best_skill}({scores_dict[best_skill]:.1f})",
                     '待提升': f"{worst_skill}({scores_dict[worst_skill]:.1f})",
                     '推荐度': "🌟🌟🌟🌟🌟" if i == 0 else "🌟🌟🌟🌟" if i == 1 else "🌟🌟🌟" if i == 2 else "🌟🌟"
