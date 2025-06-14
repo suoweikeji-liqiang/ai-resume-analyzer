@@ -7,6 +7,12 @@
 
 一个基于AI的智能简历分析和比较工具，帮助HR和招聘人员快速、客观地评估候选人简历。
 
+## 🌐 在线演示
+
+🚀 **立即体验**: [https://ai-resume-analyzer-deepseek.streamlit.app/](https://ai-resume-analyzer-deepseek.streamlit.app/)
+
+> 💡 **提示**: 在线版本已部署到 Streamlit Cloud，您可以直接访问体验所有功能，无需本地安装。
+
 ![AI简历分析系统](https://via.placeholder.com/800x400/1f77b4/ffffff?text=AI+Resume+Analyzer)
 
 ## ✨ 功能特点
