@@ -12,6 +12,90 @@ import io
 from typing import List, Dict, Any
 import time
 from datetime import datetime
+from api_client import RobustAPIClient, APIException
+# API秘钥检查功能
+def check_api_key_status(api_client: RobustAPIClient):
+    """检查API秘钥状态，类似cherrystudio的秘钥检查"""
+    st.subheader("🔑 API秘钥状态")
+    
+    # 获取API秘钥信息
+    api_key = api_client.api_key if hasattr(api_client, 'api_key') else None
+    base_url = api_client.base_url if hasattr(api_client, 'base_url') else "https://openrouter.ai/api/v1"
+    
+    if not api_key:
+        st.error("❌ 未配置API秘钥")
+        st.info("请在环境变量中设置 OPENROUTER_API_KEY")
+        return
+    
+    # 显示秘钥信息（脱敏）
+    masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+    st.success(f"✅ API秘钥已配置: {masked_key}")
+    st.info(f"🌐 服务端点: {base_url}")
+    
+    # 模型选择和测试区域
+    with st.expander("🔍 API秘钥测试", expanded=False):
+        # 免费模型列表
+        free_models = {
+            "deepseek/deepseek-chat-v3-0324:free": "🌟 DeepSeek Chat V3",
+            "deepseek/deepseek-r1-0528:free": "🔥 DeepSeek R1 (0528)",
+            "deepseek/deepseek-r1:free": "🚀 DeepSeek R1",
+            "qwen/qwen3-32b:free": "🎯 Qwen3-32B",
+            "google/gemini-2.0-flash-exp:free": "✨ Gemini 2.0 Flash (实验版)"
+        }
+        
+        selected_model = st.selectbox(
+            "选择用于测试的模型:",
+            options=list(free_models.keys()),
+            format_func=lambda x: free_models[x],
+            key="test_model_select"
+        )
+        
+        if st.button("🚀 开始测试", key="start_test"):
+                with st.spinner("检查中..."):
+                    try:
+                        # 发送简单的测试请求
+                        start_time = time.time()
+                        result = api_client.health_check(selected_model)
+                        response_time = time.time() - start_time
+                        
+                        if result and result.get('status') == 'healthy':
+                            st.success(f"✅ 秘钥有效 (响应时间: {response_time:.2f}s)")
+                            st.success(f"🤖 测试模型: {free_models[selected_model]}")
+                            st.info(f"📊 状态码: {result.get('status_code', 'N/A')}")
+                        else:
+                            st.error("❌ 秘钥无效或服务不可用")
+                            if result and 'error' in result:
+                                st.error(f"错误详情: {result['error']}")
+                            elif result:
+                                st.error(f"状态: {result.get('status', '未知')}")
+                                
+                    except Exception as e:
+                        st.error(f"❌ 检查失败: {str(e)}")
+                        if "401" in str(e) or "unauthorized" in str(e).lower():
+                            st.error("🔐 秘钥无效，请检查API秘钥是否正确")
+                        elif "403" in str(e) or "forbidden" in str(e).lower():
+                            st.error("🚫 访问被拒绝，请检查秘钥权限")
+                        elif "429" in str(e) or "rate limit" in str(e).lower():
+                            st.warning("⏰ 请求频率过高，请稍后再试")
+                        else:
+                            st.error("🌐 网络连接问题或服务不可用")
+
+
+    
+    # 显示配置信息
+    with st.expander("🔧 配置详情"):
+        st.code(f"""
+API端点: {base_url}
+API秘钥: {masked_key}
+配置来源: 环境变量 OPENROUTER_API_KEY
+""")
+        
+        st.markdown("""
+        **💡 提示:**
+        - 确保API秘钥有效且有足够的配额
+        - 免费模型通常有请求频率限制
+        - 如遇问题，请检查网络连接和秘钥权限
+        """)
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -145,24 +229,32 @@ st.markdown("""
 
 class ResumeAnalyzer:
     def __init__(self, api_key=None):
-        self.api_client = None
-        self.setup_openrouter(api_key)
+        self.api_client = self._setup_api_client(api_key)
         self.pdf_exporter = PDFExporter()
         
-    def setup_openrouter(self, api_key=None):
-        """设置OpenRouter客户端"""
+    def _setup_api_client(self, api_key=None) -> RobustAPIClient:
+        """设置稳定的API客户端"""
         # 优先使用传入的API Key，其次使用session state中的，最后使用环境变量
+        final_api_key = None
+        
         if api_key:
-            self.api_client = api_key
+            final_api_key = api_key
         elif hasattr(st.session_state, 'api_key') and st.session_state.api_key:
-            self.api_client = st.session_state.api_key
+            final_api_key = st.session_state.api_key
         else:
             env_api_key = os.getenv('OPENROUTER_API_KEY')
             if env_api_key:
-                self.api_client = env_api_key
+                final_api_key = env_api_key
             else:
                 # 使用免费模型，不需要API密钥
-                self.api_client = "free_model"
+                final_api_key = "free_model"
+        
+        # 创建稳定的API客户端，包含重试机制和降级策略
+        return RobustAPIClient(
+            api_key=final_api_key,
+            max_retries=3,  # 最大重试次数
+            timeout=30      # 请求超时时间
+        )
     
     def extract_text_from_pdf(self, pdf_file) -> str:
         """从PDF文件中提取文本"""
@@ -177,13 +269,15 @@ class ResumeAnalyzer:
             return ""
     
     def analyze_resume_with_ai(self, resume_text: str, candidate_name: str) -> Dict[str, Any]:
-        """使用OpenRouter免费模型分析简历"""
+        """使用稳定的API客户端分析简历"""
         if not self.api_client:
-            return self.get_default_scores(candidate_name)
+            return self._get_default_scores(candidate_name)
+        
+        # API调用开始
         
         # 获取模型配置
         model_config = st.session_state.get('model_config', {
-            'model': 'microsoft/phi-3-mini-128k-instruct:free',
+            'model': 'deepseek/deepseek-chat-v3-0324:free',
             'temperature': 0.3,
             'max_tokens': 2000
         })
@@ -277,65 +371,17 @@ class ResumeAnalyzer:
         注意：请确保分析客观、专业、有建设性，避免主观偏见，重点关注与岗位要求的匹配度。
         """
         
+        # 使用稳定的API客户端进行调用，包含重试机制和降级策略
         try:
-            # 使用OpenRouter的免费模型
-            url = "https://openrouter.ai/api/v1/chat/completions"
-            headers = {
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/your-repo/resume-analyzer",
-                "X-Title": "Resume Analyzer"
-            }
-            
-            # 只有在有API密钥时才添加Authorization头部
-            if self.api_client and self.api_client != "free_model":
-                headers["Authorization"] = f"Bearer {self.api_client}"
-            
-            data = {
-                "model": model_config['model'],
-                "messages": [
-                    {"role": "system", "content": "你是一个专业的HR助手，擅长分析简历并给出客观评价。请严格按照JSON格式返回结果。"},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": model_config['temperature'],
-                "max_tokens": model_config['max_tokens']
-            }
-            
-            response = requests.post(url, headers=headers, json=data, timeout=30)
-            
-            if response.status_code == 200:
-                result_data = response.json()
-                result_text = result_data['choices'][0]['message']['content']
-                
-                # 尝试解析JSON
-                try:
-                    # 清理可能的markdown格式
-                    if "```json" in result_text:
-                        result_text = result_text.split("```json")[1].split("```")[0]
-                    elif "```" in result_text:
-                        result_text = result_text.split("```")[1]
-                    
-                    result = json.loads(result_text.strip())
-                    result['candidate_name'] = candidate_name
-                    return result
-                except json.JSONDecodeError:
-                    st.warning(f"AI返回格式解析失败，使用默认评分")
-                    return self.get_default_scores(candidate_name)
-            else:
-                try:
-                    error_detail = response.json().get('error', {}).get('message', '未知错误')
-                    st.warning(f"API调用失败 (状态码: {response.status_code}): {error_detail}，使用默认评分")
-                except:
-                    st.warning(f"API调用失败 (状态码: {response.status_code})，响应内容: {response.text[:200]}...，使用默认评分")
-                return self.get_default_scores(candidate_name)
-                
-        except requests.exceptions.RequestException as e:
-            st.warning(f"网络请求失败: {str(e)}，请检查网络连接，使用默认评分")
-            return self.get_default_scores(candidate_name)
+            result = self.api_client.call_api_with_retry(prompt, model_config, candidate_name)
+            # API调用成功
+            response_time = result.pop('_response_time', 1.0)
+            return result
         except Exception as e:
-            st.warning(f"AI分析失败: {str(e)}，使用默认评分")
-            return self.get_default_scores(candidate_name)
+            # API调用失败，使用默认评分
+            return self._get_default_scores(candidate_name)
     
-    def get_default_scores(self, candidate_name: str) -> Dict[str, Any]:
+    def _get_default_scores(self, candidate_name: str) -> Dict[str, Any]:
         """返回默认评分（当AI不可用时）"""
         return {
             'candidate_name': candidate_name,
@@ -361,10 +407,64 @@ class ResumeAnalyzer:
         return self.pdf_exporter.export_candidate_to_pdf(candidate_data, interview_questions)
 
 def main():
+    # 持久化缓存文件路径
+    cache_file = '.streamlit_cache.json'
+    
+    # 加载持久化缓存
+    def load_cache():
+        try:
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {
+            'api_key_cache': '',
+            'job_config_cache': {
+                'job_title': '',
+                'job_requirements': '',
+                'company_info': '',
+                'salary_range': '',
+                'work_location': ''
+            }
+        }
+    
+    # 保存持久化缓存
+    def save_cache(cache_data):
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+    
+    # 初始化session state缓存
+    if 'cache_loaded' not in st.session_state:
+        cached_data = load_cache()
+        st.session_state.api_key_cache = cached_data.get('api_key_cache', '')
+        st.session_state.job_config_cache = cached_data.get('job_config_cache', {
+            'job_title': '',
+            'job_requirements': '',
+            'company_info': '',
+            'salary_range': '',
+            'work_location': ''
+        })
+        st.session_state.cache_loaded = True
+    
+    if 'api_key_cache' not in st.session_state:
+        st.session_state.api_key_cache = ''
+    if 'job_config_cache' not in st.session_state:
+        st.session_state.job_config_cache = {
+            'job_title': '',
+            'job_requirements': '',
+            'company_info': '',
+            'salary_range': '',
+            'work_location': ''
+        }
+    
     # 主标题区域
     st.markdown("""
     <div class="main-header">
-        <h1>🤖 AI简历智能分析系统</h1>
+        <h1>🤖 AI简历智能分析系统 <span style="font-size: 0.6em; opacity: 0.8;">v1.3.0</span></h1>
         <p>基于OpenRouter免费模型的专业简历评估工具</p>
         <p><small>支持批量分析 • 多维度评分 • 智能对比 • 可视化展示</small></p>
     </div>
@@ -376,10 +476,10 @@ def main():
         st.metric("📅 当前时间", datetime.now().strftime("%H:%M:%S"))
     with col2:
         # 动态显示当前选择的模型
-        current_model = st.session_state.get('model_config', {}).get('model', 'microsoft/phi-3-mini-128k-instruct:free')
+        current_model = st.session_state.get('model_config', {}).get('model', 'deepseek/deepseek-chat-v3-0324:free')
         model_display_names = {
             "deepseek/deepseek-r1-0528:free": "DeepSeek-R1",
-            "microsoft/phi-3-mini-128k-instruct:free": "Phi-3-Mini",
+            "deepseek/deepseek-chat-v3-0324:free": "DeepSeek-Chat-V3",
             "meta-llama/llama-3.1-8b-instruct:free": "Llama-3.1-8B", 
             "google/gemma-2-9b-it:free": "Gemma-2-9B",
             "mistralai/mistral-7b-instruct:free": "Mistral-7B",
@@ -411,132 +511,74 @@ def main():
         st.header("⚙️ 系统配置")
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # API配置区域
-        st.subheader("🔑 API配置")
-        
-        # API Key输入
-        api_key = st.text_input(
-            "OpenRouter API Key",
-            type="password",
-            placeholder="输入您的OpenRouter API Key (免费模型可选)",
-            help="免费模型无需API Key，付费模型需要配置。获取API Key: https://openrouter.ai/keys"
-        )
-        
-        # 保存API Key到session state
-        if api_key:
-            st.session_state.api_key = api_key
-            st.success("✅ API Key已配置")
-        elif 'api_key' not in st.session_state:
-            st.session_state.api_key = None
-            st.info("💡 使用免费模型无需配置API Key")
-        
-        st.markdown("---")
-        
-        # 模型配置区域
-        st.subheader("🤖 AI模型配置")
-        
-        # OpenRouter免费模型列表
-        free_models = {
-            "deepseek/deepseek-chat-v3-0324:free": "🌟 DeepSeek Chat V3",
-            "deepseek/deepseek-r1-0528:free": "🔥 DeepSeek R1 (0528)",
-            "deepseek/deepseek-r1:free": "🚀 DeepSeek R1",
-            "deepseek/deepseek-r1-0528-qwen3-8b:free": "💫 DeepSeek R1 Qwen3-8B",
-            "qwen/qwen3-32b:free": "🎯 Qwen3-32B",
-            "qwen/qwen3-235b-a22b:free": "⭐ Qwen3-235B-A22B",
-            "qwen/qwen3-30b-a3b:free": "💎 Qwen3-30B-A3B",
-            "qwen/qwen3-8b:free": "🔷 Qwen3-8B",
-            "google/gemini-2.0-flash-exp:free": "✨ Gemini 2.0 Flash (实验版)"
-        }
-        
-        paid_models = {
-            "anthropic/claude-3-5-sonnet": "🧠 Claude-3.5-Sonnet (付费)",
-            "openai/gpt-4o": "🤖 GPT-4o (付费)",
-            "openai/gpt-3.5-turbo": "⚡ GPT-3.5-Turbo (付费)",
-            "google/gemini-pro": "✨ Gemini-Pro (付费)"
-        }
-        
-        # 根据是否有API Key显示不同的模型选项
-        if st.session_state.api_key:
-            all_models = {**free_models, **paid_models}
-            model_help = "已配置API Key，可使用所有模型。免费模型标记为'免费'，其他为付费模型。"
-        else:
-            all_models = free_models
-            model_help = "当前仅显示免费模型。配置API Key后可使用付费模型。"
-        
-        selected_model = st.selectbox(
-            "选择AI模型",
-            options=list(all_models.keys()),
-            format_func=lambda x: all_models[x],
-            index=0,
-            help=model_help
-        )
-        
-        # 手动输入模型选项
-        use_custom_model = st.checkbox("🔧 手动输入模型", help="勾选此项可手动输入自定义模型名称")
-        
-        if use_custom_model:
-            custom_model = st.text_input(
-                "自定义模型名称",
-                placeholder="例如: microsoft/phi-3-mini-128k-instruct:free",
-                help="输入完整的模型名称，格式通常为: provider/model-name:version"
-            )
-            if custom_model.strip():
-                selected_model = custom_model.strip()
-                st.info(f"✅ 使用自定义模型: {selected_model}")
-        
-        final_model = selected_model
-        
-        # 模型参数配置
-        with st.expander("🔧 高级参数"):
-            temperature = st.slider("创造性 (Temperature)", 0.0, 1.0, 0.2, 0.1, help="控制AI回答的创造性，值越高越有创意。分析任务建议使用较低值。")
-            max_tokens = st.slider("最大输出长度", 1000, 8000, 4000, 500, help="控制AI回答的最大长度。更长的输出可以获得更详细的分析。")
-            
-        # 保存模型配置到session state
-        if 'model_config' not in st.session_state:
-            st.session_state.model_config = {}
-        
-        st.session_state.model_config.update({
-            'model': final_model,
-            'temperature': temperature,
-            'max_tokens': max_tokens
-        })
-        
-        st.markdown("---")
-        
-        # 岗位要求配置
+        # 招聘需求配置（突出显示）
         st.subheader("👥 招聘需求配置")
+        st.markdown("**💼 请先配置招聘需求，系统将根据此需求分析简历匹配度**")
         
         # 岗位信息
-        job_title = st.text_input("🎯 招聘岗位", placeholder="例如：高级Python开发工程师", help="输入具体的招聘岗位名称")
+        job_title = st.text_input(
+            "🎯 招聘岗位", 
+            value=st.session_state.job_config_cache['job_title'],
+            placeholder="例如：高级Python开发工程师", 
+            help="输入具体的招聘岗位名称"
+        )
         
         # 岗位要求
         job_requirements = st.text_area(
             "📋 岗位要求", 
+            value=st.session_state.job_config_cache['job_requirements'],
             placeholder="例如：\n- 3年以上Python开发经验\n- 熟悉Django/Flask框架\n- 有数据库设计经验\n- 良好的团队协作能力",
             height=120,
             help="详细描述岗位的技能要求、经验要求等"
         )
         
         # 公司信息
-        company_info = st.text_input("🏢 公司名称", placeholder="例如：科技创新有限公司", help="输入公司名称")
+        company_info = st.text_input(
+            "🏢 公司名称", 
+            value=st.session_state.job_config_cache['company_info'],
+            placeholder="例如：科技创新有限公司", 
+            help="输入公司名称"
+        )
         
         # 薪资范围
-        salary_range = st.text_input("💰 薪资范围", placeholder="例如：15K-25K", help="输入薪资范围")
+        salary_range = st.text_input(
+            "💰 薪资范围", 
+            value=st.session_state.job_config_cache['salary_range'],
+            placeholder="例如：15K-25K", 
+            help="输入薪资范围"
+        )
         
         # 工作地点
-        work_location = st.text_input("📍 工作地点", placeholder="例如：北京市朝阳区", help="输入工作地点")
+        work_location = st.text_input(
+            "📍 工作地点", 
+            value=st.session_state.job_config_cache['work_location'],
+            placeholder="例如：北京市朝阳区", 
+            help="输入工作地点"
+        )
         
-        # 保存招聘需求到session state
-        if 'job_config' not in st.session_state:
-            st.session_state.job_config = {}
-            
-        st.session_state.job_config.update({
+        # 保存招聘需求到缓存和session state
+        job_config_data = {
             'job_title': job_title,
             'job_requirements': job_requirements,
             'company_info': company_info,
             'salary_range': salary_range,
             'work_location': work_location
-        })
+        }
+        
+        # 更新缓存
+        st.session_state.job_config_cache.update(job_config_data)
+        
+        # 保存到持久化缓存
+        cache_data = {
+            'api_key_cache': st.session_state.api_key_cache,
+            'job_config_cache': st.session_state.job_config_cache
+        }
+        save_cache(cache_data)
+        
+        # 更新当前配置
+        if 'job_config' not in st.session_state:
+            st.session_state.job_config = {}
+        st.session_state.job_config.update(job_config_data)
         
         # 显示配置预览
         if job_title or job_requirements:
@@ -554,51 +596,204 @@ def main():
         
         st.markdown("---")
         
-        # 演示模式开关
-        demo_mode = st.checkbox("🎭 演示模式", help="使用示例数据进行演示，无需API密钥")
-        
-        if demo_mode:
-            st.success("🎯 演示模式已启用")
-            if st.button("📊 加载示例数据", type="primary"):
-                from test_data import get_sample_data
-                st.session_state.analysis_results = get_sample_data()
-                st.success("✅ 示例数据加载完成！")
-                st.balloons()
-        else:
-            # API配置提示
-            api_key = os.getenv('OPENROUTER_API_KEY')
-            if ":free" in selected_model:
-                st.info("🆓 当前使用免费模型")
-            elif not api_key:
-                st.warning("⚠️ 付费模型需要API密钥")
-                with st.expander("🔑 配置API密钥"):
-                    st.code("""
-# .env文件内容示例
-OPENROUTER_API_KEY=your_api_key_here
-                    """)
-                    st.markdown("""
-                    **获取API密钥：**
-                    1. 访问 [OpenRouter.ai](https://openrouter.ai)
-                    2. 注册账户并获取API密钥
-                    3. 在.env文件中配置密钥
-                    """)
+        # API配置区域（收起）
+        with st.expander("🔑 API配置", expanded=False):
+            # API Key输入（带缓存功能）
+            api_key = st.text_input(
+                "OpenRouter API Key",
+                value=st.session_state.api_key_cache,
+                type="password",
+                placeholder="输入您的OpenRouter API Key (必需)",
+                help="OpenRouter所有模型（包括免费模型）都需要配置API Key。获取API Key: https://openrouter.ai/keys"
+            )
+            
+            # 保存API Key到缓存和session state
+            if api_key:
+                st.session_state.api_key_cache = api_key
+                st.session_state.api_key = api_key
+                # 保存到持久化缓存
+                cache_data = {
+                    'api_key_cache': st.session_state.api_key_cache,
+                    'job_config_cache': st.session_state.job_config_cache
+                }
+                save_cache(cache_data)
+                st.success("✅ API Key已配置并缓存")
+            elif st.session_state.api_key_cache:
+                st.session_state.api_key = st.session_state.api_key_cache
+                st.info("💡 使用缓存的API Key")
             else:
-                st.success("✅ API密钥已配置")
-                st.info(f"密钥: ...{api_key[-8:]}")
+                st.session_state.api_key = None
+                st.warning("⚠️ 请配置OpenRouter API Key以使用AI模型")
         
-        # 添加使用说明
-        with st.expander("📖 使用说明"):
+        # API状态监控
+        # API秘钥检查功能
+        if analyzer.api_client and hasattr(analyzer.api_client, 'api_key') and analyzer.api_client.api_key:
+            check_api_key_status(analyzer.api_client)
+        
+        # 模型配置区域（收起）
+        with st.expander("🤖 AI模型配置", expanded=False):
+            # OpenRouter免费模型列表
+            free_models = {
+                "deepseek/deepseek-chat-v3-0324:free": "🌟 DeepSeek Chat V3",
+                "deepseek/deepseek-r1-0528:free": "🔥 DeepSeek R1 (0528)",
+                "deepseek/deepseek-r1:free": "🚀 DeepSeek R1",
+                "deepseek/deepseek-r1-0528-qwen3-8b:free": "💫 DeepSeek R1 Qwen3-8B",
+                "qwen/qwen3-32b:free": "🎯 Qwen3-32B",
+                "qwen/qwen3-235b-a22b:free": "⭐ Qwen3-235B-A22B",
+                "qwen/qwen3-30b-a3b:free": "💎 Qwen3-30B-A3B",
+                "qwen/qwen3-8b:free": "🔷 Qwen3-8B",
+                "google/gemini-2.0-flash-exp:free": "✨ Gemini 2.0 Flash (实验版)"
+            }
+            
+            paid_models = {
+                "anthropic/claude-3-5-sonnet": "🧠 Claude-3.5-Sonnet (付费)",
+                "openai/gpt-4o": "🤖 GPT-4o (付费)",
+                "openai/gpt-3.5-turbo": "⚡ GPT-3.5-Turbo (付费)",
+                "google/gemini-pro": "✨ Gemini-Pro (付费)"
+            }
+            
+            # 根据是否有API Key显示不同的模型选项
+            if st.session_state.api_key:
+                all_models = {**free_models, **paid_models}
+                model_help = "已配置API Key，可使用所有模型。免费模型无额外费用，付费模型按使用量计费。"
+            else:
+                all_models = free_models
+                model_help = "⚠️ 需要配置API Key才能使用模型。OpenRouter所有模型都需要API Key认证。"
+            
+            selected_model = st.selectbox(
+                "选择AI模型",
+                options=list(all_models.keys()),
+                format_func=lambda x: all_models[x],
+                index=0,
+                help=model_help
+            )
+            
+            # 手动输入模型选项
+            use_custom_model = st.checkbox("🔧 手动输入模型", help="勾选此项可手动输入自定义模型名称")
+            
+            if use_custom_model:
+                custom_model = st.text_input(
+                    "自定义模型名称",
+                    placeholder="例如: deepseek/deepseek-chat-v3-0324:free",
+                    help="输入完整的模型名称，格式通常为: provider/model-name:version"
+                )
+                if custom_model.strip():
+                    selected_model = custom_model.strip()
+                    st.info(f"✅ 使用自定义模型: {selected_model}")
+            
+            final_model = selected_model
+            
+            # 保存模型配置到session state
+            if 'model_config' not in st.session_state:
+                st.session_state.model_config = {}
+            
+            st.session_state.model_config.update({
+                'model': final_model
+            })
+        
+        # 模型参数配置（独立expander）
+        with st.expander("🔧 高级参数", expanded=False):
+            temperature = st.slider("创造性 (Temperature)", 0.0, 1.0, 0.2, 0.1, help="控制AI回答的创造性，值越高越有创意。分析任务建议使用较低值。")
+            max_tokens = st.slider("最大输出长度", 1000, 8000, 4000, 500, help="控制AI回答的最大长度。更长的输出可以获得更详细的分析。")
+            
+            # 更新模型参数到session state
+            st.session_state.model_config.update({
+                'temperature': temperature,
+                'max_tokens': max_tokens
+            })
+        
+        # 添加缓存管理
+        with st.expander("🗑️ 缓存管理", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🗑️ 清除招聘需求缓存", help="清除已保存的招聘需求信息"):
+                    st.session_state.job_config_cache = {
+                        'job_title': '',
+                        'job_requirements': '',
+                        'company_info': '',
+                        'salary_range': '',
+                        'work_location': ''
+                    }
+                    # 更新持久化缓存
+                    cache_data = {
+                        'api_key_cache': st.session_state.api_key_cache,
+                        'job_config_cache': st.session_state.job_config_cache
+                    }
+                    save_cache(cache_data)
+                    st.success("✅ 招聘需求缓存已清除")
+                    st.rerun()
+            with col2:
+                if st.button("🗑️ 清除API Key缓存", help="清除已保存的API Key"):
+                    st.session_state.api_key_cache = ''
+                    st.session_state.api_key = None
+                    # 更新持久化缓存
+                    cache_data = {
+                        'api_key_cache': st.session_state.api_key_cache,
+                        'job_config_cache': st.session_state.job_config_cache
+                    }
+                    save_cache(cache_data)
+                    st.success("✅ API Key缓存已清除")
+                    st.rerun()
+            
+            # 显示缓存状态
+            st.markdown("**缓存状态:**")
+            if st.session_state.api_key_cache:
+                st.info(f"🔑 API Key: 已缓存 ({st.session_state.api_key_cache[:8]}...)")
+            else:
+                st.info("🔑 API Key: 未缓存")
+            
+            if any(st.session_state.job_config_cache.values()):
+                cached_items = [k for k, v in st.session_state.job_config_cache.items() if v]
+                st.info(f"👥 招聘需求: 已缓存 ({len(cached_items)}/5 项)")
+            else:
+                st.info("👥 招聘需求: 未缓存")
+        
+        st.markdown("---")
+        
+        st.markdown("---")
+        
+        # 演示模式和使用说明
+        with st.expander("🎭 演示模式 & 📖 使用说明", expanded=False):
+            demo_mode = st.checkbox("启用演示模式", help="使用示例数据进行演示，无需API密钥")
+            
+            if demo_mode:
+                st.success("🎯 演示模式已启用")
+                if st.button("📊 加载示例数据", type="primary"):
+                    from test_data import get_sample_data
+                    st.session_state.analysis_results = get_sample_data()
+                    st.success("✅ 示例数据加载完成！")
+                    st.balloons()
+            
+            st.markdown("---")
             st.markdown("""
-            **演示模式**: 快速体验工具功能
+            **🎭 演示模式**: 快速体验工具功能
             - 无需API密钥
             - 使用预设示例数据
             - 可查看所有功能
             
-            **正式模式**: 分析真实简历
-            - 需要OpenAI API密钥
+            **💼 正式模式**: 分析真实简历
+            - 需要配置OpenRouter API密钥（所有模型必需）
             - 上传PDF简历文件
             - AI智能分析评分
+            
+            **💡 使用提示**:
+            1. 先配置招聘需求（会自动缓存）
+            2. 选择合适的AI模型
+            3. 上传简历文件进行分析
+            4. 查看评分结果和对比分析
             """)
+        
+        # 版本信息显示
+        st.markdown("---")
+        st.markdown(
+            """
+            <div style="text-align: center; padding: 10px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); border-radius: 8px; color: white; margin-top: 10px;">
+                <small>🤖 <strong>AI简历智能分析系统</strong></small><br>
+                <small>📦 版本 v1.3.0 | 🚀 基于OpenRouter免费模型</small>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
     
     # 主界面
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 上传简历", "📊 评分结果", "📈 对比分析", "🎯 HR初筛指南", "💼 面试官题库"])
@@ -650,12 +845,60 @@ OPENROUTER_API_KEY=your_api_key_here
     with tab2:
         st.header("📊 详细评分结果")
         
+        # 安全提取各维度分数的辅助函数
+        def safe_get_score(result, score_key, default=0):
+            score = result.get(score_key, default)
+            try:
+                if isinstance(score, str):
+                    import re
+                    numbers = re.findall(r'\d+\.?\d*', score)
+                    if numbers:
+                        return float(numbers[0])
+                    else:
+                        return float(default)
+                else:
+                    return float(score)
+            except (ValueError, TypeError):
+                return float(default)
+        
+        # 调试函数：检查数据结构
+        def debug_analysis_results():
+            if 'analysis_results' in st.session_state and st.session_state.analysis_results:
+                st.write("**调试信息：分析结果数据结构**")
+                for i, result in enumerate(st.session_state.analysis_results):
+                    with st.expander(f"候选人 {i+1}: {result.get('candidate_name', '未知')} - 数据结构"):
+                        st.json(result)
+                        st.write("**评分字段检查：**")
+                        st.write(f"- education_score: {result.get('education_score', '缺失')} (类型: {type(result.get('education_score', None))})")
+                        st.write(f"- experience_score: {result.get('experience_score', '缺失')} (类型: {type(result.get('experience_score', None))})")
+                        st.write(f"- skills_score: {result.get('skills_score', '缺失')} (类型: {type(result.get('skills_score', None))})")
+                        st.write(f"- projects_score: {result.get('projects_score', '缺失')} (类型: {type(result.get('projects_score', None))})")
+                        st.write(f"- overall_score: {result.get('overall_score', '缺失')} (类型: {type(result.get('overall_score', None))})")
+        
         if 'analysis_results' in st.session_state and st.session_state.analysis_results:
             # 添加总览统计
             st.subheader("📈 分析总览")
             total_candidates = len(st.session_state.analysis_results)
             # 安全地计算平均分数，处理可能缺失overall_score字段的情况
-            valid_scores = [r.get('overall_score', 0) for r in st.session_state.analysis_results if 'overall_score' in r]
+            valid_scores = []
+            for r in st.session_state.analysis_results:
+                if 'overall_score' in r:
+                    score = r.get('overall_score', 0)
+                    # 安全地转换score为数字类型
+                    try:
+                        if isinstance(score, str):
+                            # 尝试从字符串中提取数字
+                            import re
+                            numbers = re.findall(r'\d+\.?\d*', score)
+                            if numbers:
+                                numeric_score = float(numbers[0])
+                            else:
+                                numeric_score = 6.0  # 默认分数
+                        else:
+                            numeric_score = float(score)
+                    except (ValueError, TypeError):
+                        numeric_score = 6.0  # 默认分数
+                    valid_scores.append(numeric_score)
             avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
             
             col1, col2, col3, col4 = st.columns(4)
@@ -667,13 +910,47 @@ OPENROUTER_API_KEY=your_api_key_here
                 # 安全地找到最高得分候选人
                 valid_candidates = [r for r in st.session_state.analysis_results if 'overall_score' in r]
                 if valid_candidates:
-                    best_candidate = max(valid_candidates, key=lambda x: x.get('overall_score', 0))
-                    st.metric("🏆 最高得分", f"{best_candidate.get('overall_score', 0):.1f}")
+                    def get_numeric_score(candidate):
+                        score = candidate.get('overall_score', 0)
+                        try:
+                            if isinstance(score, str):
+                                # 尝试从字符串中提取数字
+                                import re
+                                numbers = re.findall(r'\d+\.?\d*', score)
+                                if numbers:
+                                    return float(numbers[0])
+                                else:
+                                    return 6.0  # 默认分数
+                            else:
+                                return float(score)
+                        except (ValueError, TypeError):
+                            return 6.0  # 默认分数
+                    
+                    best_candidate = max(valid_candidates, key=get_numeric_score)
+                    best_score = get_numeric_score(best_candidate)
+                    st.metric("🏆 最高得分", f"{best_score:.1f}")
                 else:
                     st.metric("🏆 最高得分", "N/A")
             with col4:
-                if valid_candidates and 'best_candidate' in locals():
-                    candidate_name = best_candidate.get('candidate_name', '未知')
+                if valid_candidates:
+                    def get_numeric_score_col4(candidate):
+                        score = candidate.get('overall_score', 0)
+                        try:
+                            if isinstance(score, str):
+                                # 尝试从字符串中提取数字
+                                import re
+                                numbers = re.findall(r'\d+\.?\d*', score)
+                                if numbers:
+                                    return float(numbers[0])
+                                else:
+                                    return 6.0  # 默认分数
+                            else:
+                                return float(score)
+                        except (ValueError, TypeError):
+                            return 6.0  # 默认分数
+                    
+                    best_candidate_col4 = max(valid_candidates, key=get_numeric_score_col4)
+                    candidate_name = best_candidate_col4.get('candidate_name', '未知')
                     display_name = candidate_name[:10] + "..." if len(candidate_name) > 10 else candidate_name
                     st.metric("📋 最佳候选人", display_name)
                 else:
@@ -697,23 +974,40 @@ OPENROUTER_API_KEY=your_api_key_here
                     else: return "❌"
                 
                 overall_score = result.get('overall_score', 0)
-                with st.expander(f"📋 {result.get('candidate_name', '未知候选人')} {get_score_emoji(overall_score)} (综合得分: {overall_score})", expanded=i==0):
+                # 安全地转换overall_score为数字类型
+                try:
+                    if isinstance(overall_score, str):
+                        # 尝试从字符串中提取数字
+                        import re
+                        numbers = re.findall(r'\d+\.?\d*', overall_score)
+                        if numbers:
+                            numeric_overall_score = float(numbers[0])
+                        else:
+                            numeric_overall_score = 6.0  # 默认分数
+                    else:
+                        numeric_overall_score = float(overall_score)
+                except (ValueError, TypeError):
+                    numeric_overall_score = 6.0  # 默认分数
+                
+                with st.expander(f"📋 {result.get('candidate_name', '未知候选人')} {get_score_emoji(numeric_overall_score)} (综合得分: {numeric_overall_score:.1f})", expanded=i==0):
                     st.markdown(f'<div class="candidate-card">', unsafe_allow_html=True)
                     
                     # 评分徽章
                     st.markdown("**🎯 快速评分概览**")
                     score_badges = ""
                     scores = [
-                        ("教育", result.get('education_score', 0)),
-                        ("经验", result.get('experience_score', 0)),
-                        ("技能", result.get('skills_score', 0)),
-                        ("项目", result.get('projects_score', 0)),
-                        ("综合", overall_score)
+                        ("教育", safe_get_score(result, 'education_score', 0)),
+                        ("经验", safe_get_score(result, 'experience_score', 0)),
+                        ("技能", safe_get_score(result, 'skills_score', 0)),
+                        ("项目", safe_get_score(result, 'projects_score', 0)),
+                        ("综合", numeric_overall_score)
                     ]
                     
                     for name, score in scores:
-                        class_name = get_score_class(score)
-                        score_badges += f'<span class="score-badge {class_name}">{name}: {score}</span>'
+                        # 确保score是数字类型
+                        numeric_score = float(score) if isinstance(score, str) else score
+                        class_name = get_score_class(numeric_score)
+                        score_badges += f'<span class="score-badge {class_name}">{name}: {numeric_score:.1f}</span>'
                     
                     st.markdown(score_badges, unsafe_allow_html=True)
                     st.markdown("<br>", unsafe_allow_html=True)
@@ -725,10 +1019,10 @@ OPENROUTER_API_KEY=your_api_key_here
                         
                         # 评分维度和分数
                         dimensions = [
-                            ('🎓 教育背景', result.get('education_score', 0), result.get('education_evaluation', '暂无评价')),
-                            ('💼 工作经验', result.get('experience_score', 0), result.get('experience_evaluation', '暂无评价')),
-                            ('🛠️ 技能匹配', result.get('skills_score', 0), result.get('skills_evaluation', '暂无评价')),
-                            ('🚀 项目经验', result.get('projects_score', 0), result.get('projects_evaluation', '暂无评价')),
+                            ('🎓 教育背景', safe_get_score(result, 'education_score', 0), result.get('education_evaluation', '暂无评价')),
+                            ('💼 工作经验', safe_get_score(result, 'experience_score', 0), result.get('experience_evaluation', '暂无评价')),
+                            ('🛠️ 技能匹配', safe_get_score(result, 'skills_score', 0), result.get('skills_evaluation', '暂无评价')),
+                            ('🚀 项目经验', safe_get_score(result, 'projects_score', 0), result.get('projects_evaluation', '暂无评价')),
                             ('⭐ 综合素质', overall_score, result.get('overall_evaluation', '暂无评价'))
                         ]
                         
@@ -760,10 +1054,10 @@ OPENROUTER_API_KEY=your_api_key_here
                         # 创建雷达图
                         categories = ['教育背景', '工作经验', '技能匹配', '项目经验', '综合素质']
                         values = [
-                            result.get('education_score', 0),
-                            result.get('experience_score', 0),
-                            result.get('skills_score', 0),
-                            result.get('projects_score', 0),
+                            safe_get_score(result, 'education_score', 0),
+                            safe_get_score(result, 'experience_score', 0),
+                            safe_get_score(result, 'skills_score', 0),
+                            safe_get_score(result, 'projects_score', 0),
                             overall_score
                         ]
                         
@@ -853,8 +1147,21 @@ OPENROUTER_API_KEY=your_api_key_here
                                     key=f"download_{result.get('candidate_name', '未知')}"
                                 )
                                 st.success("PDF报告生成成功！")
+                            except ImportError as e:
+                                st.error(f"缺少必要的依赖库: {str(e)}")
+                                st.info("请检查requirements.txt中是否包含reportlab>=3.6.0")
+                            except PermissionError as e:
+                                st.error(f"文件权限错误: {str(e)}")
+                                st.info("部署环境可能限制了文件系统访问权限")
                             except Exception as e:
                                 st.error(f"PDF生成失败: {str(e)}")
+                                st.info("💡 可能的解决方案：")
+                                st.markdown("""
+                                - 检查部署环境的字体支持
+                                - 确认reportlab库已正确安装
+                                - 如果在Streamlit Cloud，请确保fonts目录包含中文字体文件
+                                - 查看应用日志获取详细错误信息
+                                """)
                     with col_export2:
                         st.caption("点击导出按钮生成包含完整分析结果和面试问题的PDF报告")
                     
@@ -865,9 +1172,31 @@ OPENROUTER_API_KEY=your_api_key_here
     with tab3:
         st.header("🔍 智能对比分析")
         
+        # 添加调试开关
+        debug_mode = st.checkbox("🔧 显示调试信息", help="显示分析结果的数据结构，用于排查问题")
+        if debug_mode:
+            debug_analysis_results()
+            st.markdown("---")
+        
         if 'analysis_results' in st.session_state and len(st.session_state.analysis_results) > 1:
+            # 安全提取数字分数的辅助函数
+            def safe_get_numeric_score(candidate):
+                score = candidate.get('overall_score', 0)
+                try:
+                    if isinstance(score, str):
+                        import re
+                        numbers = re.findall(r'\d+\.?\d*', score)
+                        if numbers:
+                            return float(numbers[0])
+                        else:
+                            return 6.0
+                    else:
+                        return float(score)
+                except (ValueError, TypeError):
+                    return 6.0
+            
             # 排序候选人
-            sorted_results = sorted(st.session_state.analysis_results, key=lambda x: x.get('overall_score', 0), reverse=True)
+            sorted_results = sorted(st.session_state.analysis_results, key=safe_get_numeric_score, reverse=True)
             
             # 显示排名概览
             st.subheader("🏆 候选人排名")
@@ -880,28 +1209,87 @@ OPENROUTER_API_KEY=your_api_key_here
                     <div class="ranking-card rank-{i+1}">
                         <div class="rank-header">{rank_emoji} 第 {i+1} 名</div>
                         <div class="candidate-name">{result.get('candidate_name', '未知')}</div>
-                        <div class="overall-score">{result.get('overall_score', 0):.1f} 分</div>
+                        <div class="overall-score">{safe_get_numeric_score(result):.1f} 分</div>
                     </div>
                     """, unsafe_allow_html=True)
             
             st.markdown("---")
             
             # 创建对比表格
+            if not sorted_results:
+                st.warning("⚠️ 没有找到有效的分析结果数据")
+                return
+            
+            # 验证数据完整性
+            valid_results = []
+            for result in sorted_results:
+                if isinstance(result, dict) and result.get('candidate_name'):
+                    valid_results.append(result)
+                else:
+                    st.warning(f"⚠️ 发现无效的分析结果数据: {result}")
+            
+            if not valid_results:
+                st.error("❌ 所有分析结果数据都无效，无法生成对比表格")
+                return
+            
             comparison_data = {
-                '排名': [f"#{i+1}" for i in range(len(sorted_results))],
-                '👤 候选人': [result.get('candidate_name', '未知') for result in sorted_results],
-                '🎓 教育': [result.get('education_score', 0) for result in sorted_results],
-                '💼 经验': [result.get('experience_score', 0) for result in sorted_results],
-                '🛠️ 技能': [result.get('skills_score', 0) for result in sorted_results],
-                '🚀 项目': [result.get('projects_score', 0) for result in sorted_results],
-                '⭐ 综合': [result.get('overall_score', 0) for result in sorted_results]
+                '排名': [f"#{i+1}" for i in range(len(valid_results))],
+                '👤 候选人': [result.get('candidate_name', '未知') for result in valid_results],
+                '🎓 教育': [f"{safe_get_score(result, 'education_score', 0):.1f}" for result in valid_results],
+                '💼 经验': [f"{safe_get_score(result, 'experience_score', 0):.1f}" for result in valid_results],
+                '🛠️ 技能': [f"{safe_get_score(result, 'skills_score', 0):.1f}" for result in valid_results],
+                '🚀 项目': [f"{safe_get_score(result, 'projects_score', 0):.1f}" for result in valid_results],
+                '⭐ 综合': [f"{safe_get_numeric_score(result):.1f}" for result in valid_results]
             }
             
-            df_comparison = pd.DataFrame(comparison_data)
+            # 检查是否所有评分都是默认值
+            all_scores = []
+            for result in valid_results:
+                all_scores.extend([
+                    safe_get_score(result, 'education_score', 0),
+                    safe_get_score(result, 'experience_score', 0),
+                    safe_get_score(result, 'skills_score', 0),
+                    safe_get_score(result, 'projects_score', 0)
+                ])
+            
+            if all(score == 0 for score in all_scores):
+                st.warning("⚠️ 检测到所有评分都为0，可能是API分析失败或数据解析错误")
+                st.info("💡 建议检查：\n- API密钥是否有效\n- 网络连接是否正常\n- 简历内容是否完整")
+            
+            # 缓存对比表格数据到session_state
+            if 'comparison_df' not in st.session_state or st.session_state.get('comparison_data_hash') != hash(str(comparison_data)):
+                st.session_state.comparison_df = pd.DataFrame(comparison_data)
+                st.session_state.comparison_data_hash = hash(str(comparison_data))
             
             # 显示对比表格
             st.subheader("📊 详细评分对比")
-            st.dataframe(df_comparison, use_container_width=True, hide_index=True)
+            
+            # 添加CSS样式防止高分辨率下的表格抖动
+            st.markdown("""
+            <style>
+            .stDataFrame {
+                position: relative !important;
+                transform: translateZ(0) !important;
+                backface-visibility: hidden !important;
+                will-change: auto !important;
+            }
+            .stDataFrame > div {
+                overflow: hidden !important;
+                contain: layout style paint !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # 使用固定占位符避免表格抖动
+            if 'comparison_table_placeholder' not in st.session_state:
+                st.session_state.comparison_table_placeholder = st.empty()
+            
+            with st.session_state.comparison_table_placeholder.container():
+                st.dataframe(
+                    st.session_state.comparison_df, 
+                    use_container_width=True, 
+                    hide_index=True
+                )
             
             # 创建对比图表
             st.markdown("---")
@@ -912,14 +1300,14 @@ OPENROUTER_API_KEY=your_api_key_here
                 
                 # 准备柱状图数据
                 chart_data = []
-                for result in sorted_results:
+                for result in valid_results:
                     candidate_name = result.get('candidate_name', '未知')
                     chart_data.extend([
-                        {'候选人': candidate_name, '维度': '🎓 教育', '得分': result.get('education_score', 0)},
-                        {'候选人': candidate_name, '维度': '💼 经验', '得分': result.get('experience_score', 0)},
-                        {'候选人': candidate_name, '维度': '🛠️ 技能', '得分': result.get('skills_score', 0)},
-                        {'候选人': candidate_name, '维度': '🚀 项目', '得分': result.get('projects_score', 0)},
-                        {'候选人': candidate_name, '维度': '⭐ 综合', '得分': result.get('overall_score', 0)}
+                        {'候选人': candidate_name, '维度': '🎓 教育', '得分': safe_get_score(result, 'education_score', 0)},
+                        {'候选人': candidate_name, '维度': '💼 经验', '得分': safe_get_score(result, 'experience_score', 0)},
+                        {'候选人': candidate_name, '维度': '🛠️ 技能', '得分': safe_get_score(result, 'skills_score', 0)},
+                        {'候选人': candidate_name, '维度': '🚀 项目', '得分': safe_get_score(result, 'projects_score', 0)},
+                        {'候选人': candidate_name, '维度': '⭐ 综合', '得分': safe_get_numeric_score(result)}
                     ])
                 
                 chart_df = pd.DataFrame(chart_data)
@@ -952,13 +1340,13 @@ OPENROUTER_API_KEY=your_api_key_here
                 categories = ['🎓 教育背景', '💼 工作经验', '🛠️ 技能匹配', '🚀 项目经验', '⭐ 综合素质']
                 colors = px.colors.qualitative.Set1
                 
-                for i, result in enumerate(sorted_results):
+                for i, result in enumerate(valid_results):
                     values = [
-                        result.get('education_score', 0),
-                        result.get('experience_score', 0),
-                        result.get('skills_score', 0),
-                        result.get('projects_score', 0),
-                        result.get('overall_score', 0)
+                        safe_get_score(result, 'education_score', 0),
+                        safe_get_score(result, 'experience_score', 0),
+                        safe_get_score(result, 'skills_score', 0),
+                        safe_get_score(result, 'projects_score', 0),
+                        safe_get_numeric_score(result)
                     ]
                     
                     fig_radar.add_trace(go.Scatterpolar(
@@ -994,26 +1382,26 @@ OPENROUTER_API_KEY=your_api_key_here
             st.subheader("🤖 AI 智能推荐")
             
             # 生成推荐报告
-            top_candidate = sorted_results[0]
+            top_candidate = valid_results[0]
             st.success(f"**🏆 推荐候选人：{top_candidate.get('candidate_name', '未知')}**")
             
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.info(f"**综合得分：{top_candidate.get('overall_score', 0):.1f}/10**")
+                st.info(f"**综合得分：{safe_get_numeric_score(top_candidate):.1f}/10**")
             with col2:
                 # 找出最强项
                 scores = {
-                    '教育': top_candidate.get('education_score', 0),
-                    '经验': top_candidate.get('experience_score', 0), 
-                    '技能': top_candidate.get('skills_score', 0),
-                    '项目': top_candidate.get('projects_score', 0)
+                    '教育': safe_get_score(top_candidate, 'education_score', 0),
+                    '经验': safe_get_score(top_candidate, 'experience_score', 0), 
+                    '技能': safe_get_score(top_candidate, 'skills_score', 0),
+                    '项目': safe_get_score(top_candidate, 'projects_score', 0)
                 }
                 best_skill = max(scores, key=scores.get)
                 st.info(f"**最强项：{best_skill} ({scores[best_skill]:.1f}分)**")
             with col3:
                 # 计算优势程度
-                if len(sorted_results) > 1:
-                    advantage = top_candidate.get('overall_score', 0) - sorted_results[1].get('overall_score', 0)
+                if len(valid_results) > 1:
+                    advantage = safe_get_numeric_score(top_candidate) - safe_get_numeric_score(valid_results[1])
                     st.info(f"**领先优势：{advantage:.1f}分**")
                 else:
                     st.info("**唯一候选人**")
@@ -1022,13 +1410,13 @@ OPENROUTER_API_KEY=your_api_key_here
             with st.expander("📋 详细推荐分析报告", expanded=False):
                 st.markdown(f"**候选人：{top_candidate.get('candidate_name', '未知')}**")
                 st.markdown(f"**推荐理由：**")
-                st.write(f"• 综合评分最高：{top_candidate.get('overall_score', 0):.1f}/10")
+                st.write(f"• 综合评分最高：{safe_get_numeric_score(top_candidate):.1f}/10")
                 st.write(f"• 核心优势：{top_candidate['summary'][:100]}...")
                 
-                if len(sorted_results) > 1:
+                if len(valid_results) > 1:
                     st.markdown("**与其他候选人对比：**")
-                    for i, candidate in enumerate(sorted_results[1:3], 2):
-                        diff = top_candidate.get('overall_score', 0) - candidate.get('overall_score', 0)
+                    for i, candidate in enumerate(valid_results[1:3], 2):
+                        diff = safe_get_numeric_score(top_candidate) - safe_get_numeric_score(candidate)
                         st.write(f"• 比第{i}名 {candidate.get('candidate_name', '未知')} 高出 {diff:.1f} 分")
             
             # 完整排名表
@@ -1036,13 +1424,13 @@ OPENROUTER_API_KEY=your_api_key_here
             
             # 计算详细排名数据
             ranking_data = []
-            for i, result in enumerate(sorted_results):
+            for i, result in enumerate(valid_results):
                 # 找出最强项和最弱项
                 scores_dict = {
-                    '教育': result.get('education_score', 0),
-                    '经验': result.get('experience_score', 0),
-                    '技能': result.get('skills_score', 0),
-                    '项目': result.get('projects_score', 0)
+                    '教育': safe_get_score(result, 'education_score', 0),
+                    '经验': safe_get_score(result, 'experience_score', 0),
+                    '技能': safe_get_score(result, 'skills_score', 0),
+                    '项目': safe_get_score(result, 'projects_score', 0)
                 }
                 best_skill = max(scores_dict, key=scores_dict.get)
                 worst_skill = min(scores_dict, key=scores_dict.get)
@@ -1050,14 +1438,27 @@ OPENROUTER_API_KEY=your_api_key_here
                 ranking_data.append({
                     '排名': f"#{i+1}",
                     '候选人': result.get('candidate_name', '未知'),
-                    '综合得分': f"{result.get('overall_score', 0):.1f}",
+                    '综合得分': f"{safe_get_numeric_score(result):.1f}",
                     '最强项': f"{best_skill}({scores_dict[best_skill]:.1f})",
                     '待提升': f"{worst_skill}({scores_dict[worst_skill]:.1f})",
                     '推荐度': "🌟🌟🌟🌟🌟" if i == 0 else "🌟🌟🌟🌟" if i == 1 else "🌟🌟🌟" if i == 2 else "🌟🌟"
                 })
             
-            df_ranking = pd.DataFrame(ranking_data)
-            st.dataframe(df_ranking, use_container_width=True, hide_index=True)
+            # 缓存排名表格数据到session_state
+            if 'ranking_df' not in st.session_state or st.session_state.get('ranking_data_hash') != hash(str(ranking_data)):
+                st.session_state.ranking_df = pd.DataFrame(ranking_data)
+                st.session_state.ranking_data_hash = hash(str(ranking_data))
+            
+            # 使用固定占位符避免表格抖动
+            if 'ranking_table_placeholder' not in st.session_state:
+                st.session_state.ranking_table_placeholder = st.empty()
+            
+            with st.session_state.ranking_table_placeholder.container():
+                st.dataframe(
+                    st.session_state.ranking_df, 
+                    use_container_width=True, 
+                    hide_index=True
+                )
             
         elif 'analysis_results' in st.session_state and len(st.session_state.analysis_results) == 1:
             st.info("只有一个候选人，无法进行对比分析。请上传更多简历文件。")
