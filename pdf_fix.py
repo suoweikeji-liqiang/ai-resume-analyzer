@@ -24,8 +24,31 @@ class PDFExporter:
     def _register_chinese_font(self):
         """注册中文字体"""
         try:
-            # 尝试注册系统中的中文字体
-            font_paths = [
+            # 优先尝试项目内的字体文件
+            project_font_paths = [
+                os.path.join(os.path.dirname(__file__), 'fonts', 'SourceHanSans-Regular.ttf'),
+                os.path.join(os.path.dirname(__file__), 'fonts', 'wqy-microhei.ttc'),
+                os.path.join(os.path.dirname(__file__), 'fonts', 'simhei.ttf'),
+                os.path.join(os.path.dirname(__file__), 'fonts', 'simsun.ttc'),
+            ]
+            
+            # 尝试项目内字体
+            for font_path in project_font_paths:
+                if os.path.exists(font_path):
+                    try:
+                        if font_path.endswith('.ttc'):
+                            pdfmetrics.registerFont(TTFont('ChineseFont', font_path, subfontIndex=0))
+                        else:
+                            pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
+                        self.font_registered = True
+                        print(f"成功注册项目字体: {font_path}")
+                        return
+                    except Exception as e:
+                        print(f"注册项目字体失败 {font_path}: {e}")
+                        continue
+            
+            # 如果项目内字体不可用，尝试系统字体
+            system_font_paths = [
                 # Windows 系统字体路径
                 'C:/Windows/Fonts/simsun.ttc',  # 宋体
                 'C:/Windows/Fonts/simhei.ttf',  # 黑体
@@ -36,7 +59,7 @@ class PDFExporter:
                 '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',  # Linux
             ]
             
-            for font_path in font_paths:
+            for font_path in system_font_paths:
                 if os.path.exists(font_path):
                     try:
                         if font_path.endswith('.ttc'):
@@ -45,21 +68,26 @@ class PDFExporter:
                         else:
                             pdfmetrics.registerFont(TTFont('ChineseFont', font_path))
                         self.font_registered = True
-                        print(f"成功注册中文字体: {font_path}")
-                        break
+                        print(f"成功注册系统字体: {font_path}")
+                        return
                     except Exception as e:
                         print(f"注册字体失败 {font_path}: {e}")
                         continue
             
             if not self.font_registered:
-                print("警告: 未找到可用的中文字体，将使用默认字体")
+                print("警告: 未找到可用的中文字体，将使用默认字体（可能影响中文显示）")
                 
         except Exception as e:
             print(f"字体注册过程出错: {e}")
+            self.font_registered = False
     
     def _get_font_name(self):
-        """获取字体名称"""
-        return 'ChineseFont' if self.font_registered else 'Helvetica'
+        """获取字体名称，支持降级处理"""
+        if self.font_registered:
+            return 'ChineseFont'
+        else:
+            # 降级到默认字体
+            return 'Helvetica'
     
     def _create_styles(self):
         """创建PDF样式"""

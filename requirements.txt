@@ -7,3 +7,4 @@ python-dotenv>=1.0.0
 streamlit-aggrid==0.3.4
 streamlit-option-menu==0.3.6
 reportlab>=4.0.0
+Pillow>=8.0.0

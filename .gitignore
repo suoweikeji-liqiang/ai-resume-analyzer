@@ -12,6 +12,9 @@ build/
 develop-eggs/
 dist/
 downloads/
+
+# 缓存文件
+.streamlit_cache.json
 eggs/
 .eggs/
 lib/
